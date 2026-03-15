@@ -727,6 +727,10 @@
     <div class="card" style="padding:12px;">
       <div class="card-header-row" style="margin-bottom:8px;">
         <div class="card-title" style="margin-bottom:0;"><i class="fa fa-map-location-dot"></i> Live Delivery Map</div>
+        <button id="trafficLayerBtn" onclick="toggleTrafficLayer()"
+          style="background:#1a3a1a;border:1px solid #22c55e;color:#22c55e;padding:4px 10px;border-radius:6px;font-size:0.74rem;cursor:pointer;font-weight:600;">
+          🚦 Traffic Layer: OFF
+        </button>
       </div>
       <div class="map-legend">
         <span><span style="color:var(--color-green);font-size:1rem;">●</span> In Transit</span>
@@ -948,6 +952,10 @@ function fmtN(n) {
 /* ────────────────────────────────────────────
    MAP
 ──────────────────────────────────────────── */
+let _trafficLayer = null;
+let _trafficOn    = false;
+let _googleApiKey = '';
+
 function initMap(lat, lon) {
   if (_map) return;
   _map = L.map('delivery-map', { center:[lat,lon], zoom:12, attributionControl:false });
@@ -955,6 +963,32 @@ function initMap(lat, lon) {
   L.control.attribution({ prefix:'' })
     .addTo(_map)
     .setPrefix('<span style="color:#475569;font-size:10px;">© CartoDB © OSM</span>');
+}
+
+function setGoogleApiKey(key) { _googleApiKey = key; }
+
+function toggleTrafficLayer() {
+  const btn = document.getElementById('trafficLayerBtn');
+  if (_trafficOn) {
+    if (_trafficLayer) { _map.removeLayer(_trafficLayer); _trafficLayer = null; }
+    _trafficOn = false;
+    btn.textContent = '🚦 Traffic Layer: OFF';
+    btn.style.background = '#1a3a1a'; btn.style.borderColor = '#22c55e'; btn.style.color = '#22c55e';
+  } else {
+    if (!_googleApiKey) {
+      toast('Add GOOGLE_MAPS_API_KEY to enable live traffic layer', 'error');
+      return;
+    }
+    _trafficLayer = L.tileLayer(
+      `https://maps.googleapis.com/maps/vt?pb=!1m5!1m4!1i{z}!2i{x}!3i{y}!4i256!2m8!1e2!2ssvv!4m2!1scb_client!2sapiv3!4m2!1scc!2s*211m3*211e3*212b1*213e2*212b1*214b1!3m17!2sen-IN!3sIN!5e1105!12m4!1e68!2m2!1sset!2sRoadmapSatellite!12m3!1e37!2m1!1ssmartmaps!4e3&key=${_googleApiKey}`,
+      { maxZoom:19, opacity:0.8 }
+    );
+    _trafficLayer.addTo(_map);
+    _trafficOn = true;
+    btn.textContent = '🚦 Traffic Layer: ON';
+    btn.style.background = '#422006'; btn.style.borderColor = '#f97316'; btn.style.color = '#f97316';
+    toast('Live Google traffic layer enabled', 'success');
+  }
 }
 
 function clearMarkers() {
@@ -1030,7 +1064,8 @@ function addIncidentMarkers(incidents) {
 }
 
 function updateMap(data) {
-  if (!_map) initMap(data.lat || 40.7128, data.lon || -74.006);
+  if (!_map) initMap(data.lat || 19.076, data.lon || 72.877);
+  if (data.google_maps_key) setGoogleApiKey(data.google_maps_key);
   clearMarkers();
   if (data.deliveries) addDeliveryMarkers(data.deliveries);
   addEventMarkers(data.events);

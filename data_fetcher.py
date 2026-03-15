@@ -148,8 +148,94 @@ def _congestion_label(flow_ratio: float) -> str:
     return "Gridlock"
 
 async def fetch_traffic() -> dict:
-    if not config.TOMTOM_API_KEY:
+    if config.GOOGLE_MAPS_API_KEY:
+        return await _fetch_traffic_google()
+    if config.TOMTOM_API_KEY:
+        return await _fetch_traffic_tomtom()
+    return _mock_traffic()
+
+
+async def _fetch_traffic_google() -> dict:
+    """Use Google Distance Matrix API to get real congestion per zone."""
+    lat, lon = _active_location["lat"], _active_location["lon"]
+    # 8 probe destinations spread around city — compare free-flow vs traffic time
+    zone_defs = [
+        ("City Centre",      0.00,  0.00),
+        ("North Zone",       0.07,  0.00),
+        ("South Zone",      -0.07,  0.00),
+        ("East Zone",        0.00,  0.09),
+        ("West Zone",        0.00, -0.09),
+        ("Airport Corridor", 0.05,  0.06),
+        ("Industrial Area",  -0.04, 0.07),
+        ("IT Corridor",      0.06, -0.05),
+    ]
+    destinations = "|".join(f"{lat+dlat},{lon+dlon}" for _, dlat, dlon in zone_defs)
+    url = (
+        f"https://maps.googleapis.com/maps/api/distancematrix/json"
+        f"?origins={lat},{lon}"
+        f"&destinations={destinations}"
+        f"&departure_time=now"
+        f"&traffic_model=best_guess"
+        f"&key={config.GOOGLE_MAPS_API_KEY}"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=12) as client:
+            r = await client.get(url)
+            r.raise_for_status()
+            d = r.json()
+
+        rows    = d.get("rows", [{}])[0].get("elements", [])
+        zones   = []
+        delays  = []
+        for i, (name, dlat, dlon) in enumerate(zone_defs):
+            el = rows[i] if i < len(rows) else {}
+            status = el.get("status", "ZERO_RESULTS")
+            if status != "OK":
+                flow_ratio = _rnd(0.5, 0.9)
+            else:
+                free_flow  = el.get("duration", {}).get("value", 600)
+                in_traffic = el.get("duration_in_traffic", {}).get("value", free_flow)
+                # flow_ratio = free_flow / in_traffic  (1.0 = no congestion, <0.5 = gridlock)
+                flow_ratio = round(min(free_flow / max(in_traffic, 1), 1.0), 2)
+                delay_min  = max(0, int((in_traffic - free_flow) / 60))
+                delays.append(delay_min)
+            zones.append({
+                "name":       name,
+                "lat":        round(lat + dlat, 5),
+                "lon":        round(lon + dlon, 5),
+                "flow_ratio": flow_ratio,
+                "congestion": _congestion_label(flow_ratio),
+            })
+
+        overall       = sum(1 - z["flow_ratio"] for z in zones) / len(zones)
+        avg_delay     = int(sum(delays) / len(delays)) if delays else 0
+        # Build incident-style delay summary from worst zones
+        incidents     = []
+        for z in sorted(zones, key=lambda x: x["flow_ratio"])[:3]:
+            if z["flow_ratio"] < 0.75:
+                incidents.append({
+                    "type":      "Traffic Congestion",
+                    "severity":  _congestion_severity(z["flow_ratio"]),
+                    "lat":       z["lat"],
+                    "lon":       z["lon"],
+                    "road":      z["name"],
+                    "delay_min": max(5, int((1 - z["flow_ratio"]) * 40)),
+                    "reported":  datetime.now().strftime("%H:%M"),
+                })
+        return {
+            "overall_congestion": round(overall * 100, 1),
+            "congestion_label":   _congestion_label(1 - overall),
+            "avg_delay_min":      avg_delay,
+            "incidents":          incidents,
+            "zones":              zones,
+            "timestamp":          datetime.now().isoformat(),
+            "source":             "google",
+        }
+    except Exception:
         return _mock_traffic()
+
+
+async def _fetch_traffic_tomtom() -> dict:
     try:
         lat, lon = _active_location["lat"], _active_location["lon"]
         bbox = f"{lon-0.1},{lat-0.07},{lon+0.1},{lat+0.07}"
@@ -164,9 +250,9 @@ async def fetch_traffic() -> dict:
             d = r.json()
         incidents = []
         for inc in d.get("incidents", [])[:10]:
-            props = inc.get("properties", {})
-            geom  = inc.get("geometry", {})
-            coords = geom.get("coordinates", [[[0,0]]])[0][0] if geom else [0,0]
+            props  = inc.get("properties", {})
+            geom   = inc.get("geometry", {})
+            coords = geom.get("coordinates", [[[0, 0]]])[0][0] if geom else [0, 0]
             incidents.append({
                 "type":      props.get("incidentCategory", "Unknown"),
                 "severity":  props.get("magnitudeOfDelay", "Unknown"),
@@ -178,10 +264,17 @@ async def fetch_traffic() -> dict:
             })
         mock = _mock_traffic()
         mock["incidents"] = incidents or mock["incidents"]
-        mock["source"] = "tomtom"
+        mock["source"]    = "tomtom"
         return mock
     except Exception:
         return _mock_traffic()
+
+
+def _congestion_severity(flow_ratio: float) -> str:
+    if flow_ratio >= 0.75: return "Minor"
+    if flow_ratio >= 0.55: return "Moderate"
+    if flow_ratio >= 0.35: return "Major"
+    return "Critical"
 
 # ── EVENTS ─────────────────────────────────────────────────────────────────────
 

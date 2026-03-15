@@ -49,6 +49,7 @@ async def refresh_all():
         "lat":             loc["lat"],
         "lon":             loc["lon"],
         "last_updated":    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "google_maps_key": config.GOOGLE_MAPS_API_KEY,
         "weather":         weather,
         "traffic":         traffic,
         "events":          events,
