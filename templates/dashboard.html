@@ -618,8 +618,69 @@
       <button class="btn btn-primary" id="btn-refresh" onclick="forceRefresh()">
         <i class="fa fa-bolt"></i> Force Refresh
       </button>
+      <button class="btn" style="background:#7c3aed;color:#fff;" onclick="openUploadModal()">
+        <i class="fa fa-file-csv"></i> Upload CSV
+      </button>
     </div>
   </header>
+
+  <!-- ── CSV UPLOAD MODAL ── -->
+  <div id="uploadModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;align-items:center;justify-content:center;">
+    <div style="background:#1e293b;border:1px solid #334155;border-radius:14px;width:520px;max-width:95vw;padding:28px;position:relative;">
+      <button onclick="closeUploadModal()" style="position:absolute;top:14px;right:16px;background:none;border:none;color:#94a3b8;font-size:18px;cursor:pointer;">✕</button>
+      <h2 style="font-size:1.1rem;font-weight:700;margin-bottom:4px;"><i class="fa fa-file-csv" style="color:#7c3aed"></i> Upload Delivery Data</h2>
+      <p style="font-size:0.8rem;color:#94a3b8;margin-bottom:20px;">Upload your CSV file — dashboard updates instantly with your real orders.</p>
+
+      <!-- Drop zone -->
+      <div id="dropZone" onclick="document.getElementById('csvFileInput').click()"
+        style="border:2px dashed #334155;border-radius:10px;padding:32px;text-align:center;cursor:pointer;transition:border-color .2s;margin-bottom:16px;"
+        ondragover="event.preventDefault();this.style.borderColor='#7c3aed'"
+        ondragleave="this.style.borderColor='#334155'"
+        ondrop="handleDrop(event)">
+        <div style="font-size:2rem;margin-bottom:8px;">📂</div>
+        <div style="font-weight:600;margin-bottom:4px;">Click to browse or drag & drop</div>
+        <div style="font-size:0.78rem;color:#64748b;">CSV files only · Max 5 MB</div>
+        <input type="file" id="csvFileInput" accept=".csv" style="display:none" onchange="handleFileSelect(this.files[0])"/>
+      </div>
+
+      <!-- Selected file info -->
+      <div id="fileInfo" style="display:none;background:#0f172a;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:0.82rem;">
+        <span id="fileName" style="font-weight:600;"></span>
+        <span id="fileSize" style="color:#94a3b8;margin-left:8px;"></span>
+      </div>
+
+      <!-- Column format hint -->
+      <details style="margin-bottom:16px;">
+        <summary style="font-size:0.8rem;color:#94a3b8;cursor:pointer;">📋 Required / supported columns</summary>
+        <div style="font-size:0.76rem;color:#64748b;margin-top:8px;line-height:1.8;">
+          <b style="color:#e2e8f0;">Required (at least one):</b> address &nbsp;|&nbsp; pincode<br>
+          <b style="color:#e2e8f0;">Optional:</b> order_id · status · driver · package_type · eta · priority · city · customer · phone · weight · value · lat · lon<br>
+          <b style="color:#e2e8f0;">Status values:</b> In Transit · Delayed · At Risk · Delivered · Cancelled
+        </div>
+      </details>
+
+      <div style="display:flex;gap:10px;">
+        <a href="/api/download-template" style="flex:1;text-align:center;padding:9px;border-radius:6px;border:1px solid #334155;color:#94a3b8;font-size:0.8rem;text-decoration:none;">
+          <i class="fa fa-download"></i> Download Template
+        </a>
+        <button id="uploadBtn" onclick="submitUpload()" disabled
+          style="flex:1;padding:9px;border-radius:6px;background:#7c3aed;border:none;color:#fff;font-size:0.8rem;font-weight:600;cursor:pointer;opacity:.5;">
+          <i class="fa fa-upload"></i> Upload & Apply
+        </button>
+      </div>
+
+      <!-- Progress -->
+      <div id="uploadProgress" style="display:none;margin-top:16px;">
+        <div style="height:4px;background:#334155;border-radius:2px;overflow:hidden;">
+          <div id="progressBar" style="height:100%;width:0%;background:#7c3aed;transition:width .4s;border-radius:2px;"></div>
+        </div>
+        <div id="uploadStatus" style="font-size:0.78rem;color:#94a3b8;margin-top:6px;text-align:center;">Uploading…</div>
+      </div>
+    </div>
+  </div>
+  <style>
+  #dropZone:hover { border-color: #7c3aed; }
+  </style>
 
   <!-- ═══════════════════════════════════════
        STAT CARDS
@@ -1536,6 +1597,90 @@ document.addEventListener('click', e => {
     document.getElementById('locationDropdown').classList.remove('visible');
   }
 });
+
+/* ── CSV UPLOAD ────────────────────────────────────────────────────────────── */
+let _uploadFile = null;
+
+function openUploadModal() {
+  document.getElementById('uploadModal').style.display = 'flex';
+  _uploadFile = null;
+  document.getElementById('fileInfo').style.display = 'none';
+  document.getElementById('uploadProgress').style.display = 'none';
+  document.getElementById('uploadBtn').disabled = true;
+  document.getElementById('uploadBtn').style.opacity = '.5';
+  document.getElementById('progressBar').style.width = '0%';
+}
+
+function closeUploadModal() {
+  document.getElementById('uploadModal').style.display = 'none';
+}
+
+function handleDrop(e) {
+  e.preventDefault();
+  document.getElementById('dropZone').style.borderColor = '#334155';
+  const file = e.dataTransfer.files[0];
+  if (file) handleFileSelect(file);
+}
+
+function handleFileSelect(file) {
+  if (!file || !file.name.endsWith('.csv')) {
+    alert('Please select a CSV file.');
+    return;
+  }
+  _uploadFile = file;
+  document.getElementById('fileName').textContent = file.name;
+  document.getElementById('fileSize').textContent = (file.size / 1024).toFixed(1) + ' KB';
+  document.getElementById('fileInfo').style.display = 'block';
+  const btn = document.getElementById('uploadBtn');
+  btn.disabled = false;
+  btn.style.opacity = '1';
+}
+
+async function submitUpload() {
+  if (!_uploadFile) return;
+  const btn     = document.getElementById('uploadBtn');
+  const prog    = document.getElementById('uploadProgress');
+  const bar     = document.getElementById('progressBar');
+  const status  = document.getElementById('uploadStatus');
+
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> Processing…';
+  prog.style.display = 'block';
+  bar.style.width = '30%';
+  status.textContent = 'Uploading file…';
+
+  const form = new FormData();
+  form.append('file', _uploadFile);
+
+  try {
+    bar.style.width = '60%';
+    status.textContent = 'Geocoding addresses… (may take 1–2 min for large files)';
+    const r = await fetch('/api/upload-deliveries', { method: 'POST', body: form });
+    const data = await r.json();
+    bar.style.width = '100%';
+
+    if (!r.ok) {
+      status.textContent = '❌ ' + (data.error || 'Upload failed');
+      btn.innerHTML = '<i class="fa fa-upload"></i> Upload & Apply';
+      btn.disabled = false;
+      btn.style.opacity = '1';
+      return;
+    }
+
+    status.textContent = `✅ ${data.count} deliveries loaded successfully!`;
+    if (data.warnings?.length) {
+      status.textContent += ' ⚠️ ' + data.warnings.join(' | ');
+    }
+    toast(`📦 ${data.count} real deliveries loaded from CSV`, 'success');
+    await fetchDashboard();
+    setTimeout(closeUploadModal, 2000);
+  } catch(e) {
+    status.textContent = '❌ Upload failed — check your connection';
+    btn.innerHTML = '<i class="fa fa-upload"></i> Upload & Apply';
+    btn.disabled = false;
+    btn.style.opacity = '1';
+  }
+}
 </script>
 
 <!-- Leaflet popup dark theme override -->

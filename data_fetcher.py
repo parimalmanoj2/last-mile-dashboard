@@ -388,3 +388,8 @@ def get_deliveries() -> list[dict]:
     if not _delivery_store:
         init_deliveries()
     return _delivery_store
+
+def set_uploaded_deliveries(deliveries: list[dict]) -> None:
+    """Replace simulated deliveries with real uploaded data."""
+    global _delivery_store
+    _delivery_store = deliveries

@@ -5,15 +5,17 @@ from datetime import datetime
 from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from fastapi import FastAPI, Query
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, Query, UploadFile, File
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from fastapi import Request
 from pydantic import BaseModel
+import io
 
 import config
 import data_fetcher as df
 import analyzer
+import csv_loader
 
 app = FastAPI(title="Last Mile Delivery Intelligence")
 
@@ -117,6 +119,36 @@ async def api_set_location(payload: LocationPayload):
     _history.clear()
     await refresh_all()
     return {"status": "ok", "location": df.get_active_location()}
+
+@app.post("/api/upload-deliveries")
+async def api_upload_deliveries(file: UploadFile = File(...)):
+    """Upload a CSV of delivery orders — replaces simulated data with real orders."""
+    if not file.filename.endswith(".csv"):
+        return JSONResponse({"error": "Only CSV files are supported"}, status_code=400)
+    content = await file.read()
+    if len(content) > 5 * 1024 * 1024:  # 5 MB limit
+        return JSONResponse({"error": "File too large (max 5 MB)"}, status_code=400)
+    deliveries, warnings = await csv_loader.parse_csv(content, geocode=True)
+    if not deliveries:
+        return JSONResponse({"error": "No valid rows found in CSV", "warnings": warnings}, status_code=400)
+    df.set_uploaded_deliveries(deliveries)
+    await refresh_all()
+    return {
+        "status":    "ok",
+        "count":     len(deliveries),
+        "warnings":  warnings,
+        "updated":   _state.get("last_updated"),
+    }
+
+@app.get("/api/download-template")
+async def api_download_template():
+    """Download a sample CSV template with correct column names."""
+    csv_str = csv_loader.generate_template_csv()
+    return StreamingResponse(
+        io.StringIO(csv_str),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=delivery_template.csv"}
+    )
 
 # ── entry point ─────────────────────────────────────────────────────────────────
 
