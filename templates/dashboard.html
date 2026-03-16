@@ -259,6 +259,26 @@
     }
     .map-legend span { display: flex; align-items: center; gap: 4px; }
 
+    /* ── Traffic map controls ──────────────────────────── */
+    @keyframes pulse-ring {
+      0%   { transform: scale(1);   opacity: 0.8; }
+      70%  { transform: scale(2.4); opacity: 0; }
+      100% { transform: scale(2.4); opacity: 0; }
+    }
+    .inc-pulse {
+      position: relative; display: inline-flex; align-items: center; justify-content: center;
+    }
+    .inc-pulse::before {
+      content: '';
+      position: absolute; inset: -4px;
+      border-radius: 50%;
+      animation: pulse-ring 1.8s ease-out infinite;
+    }
+    .inc-pulse.Critical::before { background: rgba(239,68,68,.6); }
+    .inc-pulse.Major::before    { background: rgba(249,115,22,.5); }
+    .inc-pulse.Moderate::before { background: rgba(245,158,11,.4); }
+    .inc-pulse.Minor::before    { background: rgba(34,197,94,.3); animation: none; }
+
     /* ── Chart ─────────────────────────────────────────── */
     .chart-wrap { position: relative; height: 210px; }
 
@@ -852,10 +872,20 @@
     <div class="card" style="padding:12px;">
       <div class="card-header-row" style="margin-bottom:8px;">
         <div class="card-title" style="margin-bottom:0;"><i class="fa fa-map-location-dot"></i> Live Delivery Map</div>
-        <button id="trafficLayerBtn" onclick="toggleTrafficLayer()"
-          style="background:#1a3a1a;border:1px solid #22c55e;color:#22c55e;padding:4px 10px;border-radius:6px;font-size:0.74rem;cursor:pointer;font-weight:600;">
-          🚦 Traffic Layer: OFF
-        </button>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <button id="flowBtn" onclick="toggleFlowLayer()" title="TomTom live traffic flow colours"
+            style="background:#1a2a1a;border:1px solid #475569;color:#94a3b8;padding:4px 9px;border-radius:6px;font-size:0.72rem;cursor:pointer;font-weight:600;transition:all .2s;">
+            🟢 Flow
+          </button>
+          <button id="incBtn" onclick="toggleIncidentTiles()" title="TomTom incident overlay"
+            style="background:#2a1a1a;border:1px solid #475569;color:#94a3b8;padding:4px 9px;border-radius:6px;font-size:0.72rem;cursor:pointer;font-weight:600;transition:all .2s;">
+            ⚠ Incidents
+          </button>
+          <button id="zoneBtn" onclick="toggleZoneOverlays()" title="Congestion zone circles"
+            style="background:#1a1a2a;border:1px solid #475569;color:#94a3b8;padding:4px 9px;border-radius:6px;font-size:0.72rem;cursor:pointer;font-weight:600;transition:all .2s;">
+            🔵 Zones
+          </button>
+        </div>
       </div>
       <div class="map-legend">
         <span><span style="color:var(--color-green);font-size:1rem;">●</span> In Transit</span>
@@ -983,35 +1013,15 @@
   </div>
 
   <!-- ═══════════════════════════════════════
-       DELIVERIES TABLE
+       TRAFFIC INTELLIGENCE
   ═══════════════════════════════════════ -->
-  <div class="table-section">
+  <div class="table-section" id="traffic-intel-section">
     <div class="section-hdr">
-      <div class="section-title"><i class="fa fa-table-list"></i> Delivery Fleet Status</div>
-      <div class="table-controls">
-        <input type="text" class="search-input" id="tbl-search" placeholder="Filter deliveries…" oninput="filterTable(this.value)" />
-        <span class="section-count" id="tbl-count">0 deliveries</span>
-      </div>
+      <div class="section-title"><i class="fa fa-satellite-dish"></i> Traffic Intelligence — Zone Breakdown</div>
+      <span class="section-count" id="traffic-intel-count">0 zones</span>
     </div>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th onclick="sortTable('id')">ID <span class="sort-ic">↕</span></th>
-            <th onclick="sortTable('address')">Address <span class="sort-ic">↕</span></th>
-            <th onclick="sortTable('driver')">Driver <span class="sort-ic">↕</span></th>
-            <th onclick="sortTable('package_type')">Package <span class="sort-ic">↕</span></th>
-            <th onclick="sortTable('priority')">Priority <span class="sort-ic">↕</span></th>
-            <th onclick="sortTable('eta')">ETA <span class="sort-ic">↕</span></th>
-            <th onclick="sortTable('status')">Status <span class="sort-ic">↕</span></th>
-            <th onclick="sortTable('risk_score')">Risk Score <span class="sort-ic">↕</span></th>
-            <th>Risk Factors</th>
-          </tr>
-        </thead>
-        <tbody id="tbl-body">
-          <tr><td colspan="9" class="empty">Loading deliveries…</td></tr>
-        </tbody>
-      </table>
+    <div id="traffic-intel-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;padding:4px 0;">
+      <div class="empty" style="grid-column:1/-1;padding:20px 0;"><i class="fa fa-spinner fa-spin"></i> Loading traffic intelligence…</div>
     </div>
   </div>
 
@@ -1039,14 +1049,19 @@
 /* ────────────────────────────────────────────
    STATE
 ──────────────────────────────────────────── */
-let _map         = null;
-let _markers     = [];
-let _chart       = null;
-let _deliveries  = [];
-let _sortCol     = 'risk_score';
-let _sortDir     = -1;
-let _filter      = '';
-let _sse         = null;
+let _map            = null;
+let _markers        = [];
+let _chart          = null;
+let _deliveries     = [];
+let _sse            = null;
+let _tomtomKey      = '';
+let _flowLayer      = null;
+let _incTileLayer   = null;
+let _zoneCircles    = [];
+let _flowOn         = false;
+let _incTilesOn     = false;
+let _zonesOn        = false;
+let _lastZones      = [];
 
 /* ────────────────────────────────────────────
    COLOR / LABEL HELPERS
@@ -1085,42 +1100,103 @@ function fmtN(n) {
 /* ────────────────────────────────────────────
    MAP
 ──────────────────────────────────────────── */
-let _trafficLayer = null;
-let _trafficOn    = false;
-let _googleApiKey = '';
-
 function initMap(lat, lon) {
   if (_map) return;
   _map = L.map('delivery-map', { center:[lat,lon], zoom:12, attributionControl:false });
   L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom:19 }).addTo(_map);
   L.control.attribution({ prefix:'' })
     .addTo(_map)
-    .setPrefix('<span style="color:#475569;font-size:10px;">© CartoDB © OSM</span>');
+    .setPrefix('<span style="color:#475569;font-size:10px;">© CartoDB © OSM © TomTom</span>');
 }
 
-function setGoogleApiKey(key) { _googleApiKey = key; }
+function setTomtomKey(key) { _tomtomKey = key || ''; }
 
-function toggleTrafficLayer() {
-  const btn = document.getElementById('trafficLayerBtn');
-  if (_trafficOn) {
-    if (_trafficLayer) { _map.removeLayer(_trafficLayer); _trafficLayer = null; }
-    _trafficOn = false;
-    btn.textContent = '🚦 Traffic Layer: OFF';
-    btn.style.background = '#1a3a1a'; btn.style.borderColor = '#22c55e'; btn.style.color = '#22c55e';
+/* ── Flow tile layer (TomTom relative0-dark) ── */
+function toggleFlowLayer() {
+  const btn = document.getElementById('flowBtn');
+  if (_flowOn) {
+    if (_flowLayer) { _map.removeLayer(_flowLayer); _flowLayer = null; }
+    _flowOn = false;
+    btn.style.cssText = 'background:#1a2a1a;border:1px solid #475569;color:#94a3b8;padding:4px 9px;border-radius:6px;font-size:0.72rem;cursor:pointer;font-weight:600;transition:all .2s;';
+    btn.textContent = '🟢 Flow';
   } else {
-    if (!_googleApiKey) {
-      toast('Add GOOGLE_MAPS_API_KEY to enable live traffic layer', 'error');
-      return;
-    }
-    _trafficLayer = L.tileLayer(
-      `https://maps.googleapis.com/maps/vt?pb=!1m5!1m4!1i{z}!2i{x}!3i{y}!4i256!2m8!1e2!2ssvv!4m2!1scb_client!2sapiv3!4m2!1scc!2s*211m3*211e3*212b1*213e2*212b1*214b1!3m17!2sen-IN!3sIN!5e1105!12m4!1e68!2m2!1sset!2sRoadmapSatellite!12m3!1e37!2m1!1ssmartmaps!4e3&key=${_googleApiKey}`,
-      { maxZoom:19, opacity:0.8 }
+    if (!_tomtomKey) { toast('TomTom API key not configured — set TOMTOM_API_KEY on Render', 'error'); return; }
+    _flowLayer = L.tileLayer(
+      `https://api.tomtom.com/traffic/map/4/tile/flow/relative0-dark/{z}/{x}/{y}.png?key=${_tomtomKey}&tileSize=256`,
+      { maxZoom:19, opacity:0.75, attribution:'' }
     );
-    _trafficLayer.addTo(_map);
-    _trafficOn = true;
-    btn.textContent = '🚦 Traffic Layer: ON';
-    btn.style.background = '#422006'; btn.style.borderColor = '#f97316'; btn.style.color = '#f97316';
-    toast('Live Google traffic layer enabled', 'success');
+    _flowLayer.addTo(_map);
+    _flowOn = true;
+    btn.style.cssText = 'background:#14401a;border:1px solid #22c55e;color:#22c55e;padding:4px 9px;border-radius:6px;font-size:0.72rem;cursor:pointer;font-weight:600;transition:all .2s;';
+    btn.textContent = '🟢 Flow ON';
+    toast('TomTom live traffic flow layer enabled', 'success');
+  }
+}
+
+/* ── Incident tile layer (TomTom incidents/night) ── */
+function toggleIncidentTiles() {
+  const btn = document.getElementById('incBtn');
+  if (_incTilesOn) {
+    if (_incTileLayer) { _map.removeLayer(_incTileLayer); _incTileLayer = null; }
+    _incTilesOn = false;
+    btn.style.cssText = 'background:#2a1a1a;border:1px solid #475569;color:#94a3b8;padding:4px 9px;border-radius:6px;font-size:0.72rem;cursor:pointer;font-weight:600;transition:all .2s;';
+    btn.textContent = '⚠ Incidents';
+  } else {
+    if (!_tomtomKey) { toast('TomTom API key not configured', 'error'); return; }
+    _incTileLayer = L.tileLayer(
+      `https://api.tomtom.com/traffic/map/4/tile/incidents/night/{z}/{x}/{y}.png?key=${_tomtomKey}&tileSize=256`,
+      { maxZoom:19, opacity:0.85, attribution:'' }
+    );
+    _incTileLayer.addTo(_map);
+    _incTilesOn = true;
+    btn.style.cssText = 'background:#3d1a1a;border:1px solid #f97316;color:#f97316;padding:4px 9px;border-radius:6px;font-size:0.72rem;cursor:pointer;font-weight:600;transition:all .2s;';
+    btn.textContent = '⚠ Incidents ON';
+    toast('TomTom incident overlay enabled', 'success');
+  }
+}
+
+/* ── Zone circles ── */
+function _clearZoneCircles() {
+  _zoneCircles.forEach(c => _map.removeLayer(c));
+  _zoneCircles = [];
+}
+
+function _drawZoneCircles(zones) {
+  _clearZoneCircles();
+  (zones || []).forEach(z => {
+    const col   = congColor(z.flow_ratio);
+    const alpha = z.flow_ratio < 0.45 ? 0.22 : 0.13;
+    const r     = L.circle([z.lat, z.lon], {
+      radius:      1800,
+      color:       col,
+      fillColor:   col,
+      fillOpacity: alpha,
+      weight:      1.5,
+      opacity:     0.55,
+    }).addTo(_map);
+    r.bindTooltip(`<strong style="color:${col}">${z.name}</strong><br>
+      <span style="font-size:11px;">${z.congestion} &nbsp;·&nbsp; flow ${(z.flow_ratio*100).toFixed(0)}%</span>`,
+      { sticky:true, direction:'top',
+        className:'leaflet-tooltip',
+        opacity:0.95 });
+    _zoneCircles.push(r);
+  });
+}
+
+function toggleZoneOverlays() {
+  const btn = document.getElementById('zoneBtn');
+  if (_zonesOn) {
+    _clearZoneCircles();
+    _zonesOn = false;
+    btn.style.cssText = 'background:#1a1a2a;border:1px solid #475569;color:#94a3b8;padding:4px 9px;border-radius:6px;font-size:0.72rem;cursor:pointer;font-weight:600;transition:all .2s;';
+    btn.textContent = '🔵 Zones';
+  } else {
+    if (!_lastZones.length) { toast('No zone data available yet', 'info'); return; }
+    _drawZoneCircles(_lastZones);
+    _zonesOn = true;
+    btn.style.cssText = 'background:#1a1a3d;border:1px solid #3b82f6;color:#3b82f6;padding:4px 9px;border-radius:6px;font-size:0.72rem;cursor:pointer;font-weight:600;transition:all .2s;';
+    btn.textContent = '🔵 Zones ON';
+    toast('Congestion zone overlays enabled', 'success');
   }
 }
 
@@ -1178,31 +1254,44 @@ function addEventMarkers(events) {
 }
 
 function addIncidentMarkers(incidents) {
+  const sevColor = { Critical:'#ef4444', Major:'#f97316', Moderate:'#f59e0b', Minor:'#22c55e' };
   (incidents || []).forEach(inc => {
     if (!inc.lat || !inc.lon) return;
+    const sev = inc.severity || 'Minor';
+    const col = sevColor[sev] || '#facc15';
+    const isCritical = sev === 'Critical' || sev === 'Major';
     const icon = L.divIcon({
-      html: `<span style="font-size:16px;filter:drop-shadow(0 0 5px rgba(250,204,21,.9));">⚠</span>`,
-      className: '', iconSize:[18,18], iconAnchor:[9,9],
+      html: `<div class="inc-pulse ${sev}" style="width:20px;height:20px;">
+               <span style="font-size:${isCritical?18:15}px;filter:drop-shadow(0 0 6px ${col});">⚠</span>
+             </div>`,
+      className: '', iconSize:[20,20], iconAnchor:[10,10],
     });
     const m = L.marker([inc.lat, inc.lon], { icon }).addTo(_map);
     m.bindPopup(popupStyle(`
-      <div style="font-weight:700;color:#facc15;">Traffic Incident</div>
-      <div style="color:#94a3b8;margin:2px 0;font-size:12px;">${inc.type}</div>
-      <div style="font-size:12px;">Road: <strong style="color:#06b6d4;">${inc.road}</strong></div>
-      <div style="font-size:12px;">Severity: <strong>${inc.severity}</strong> &nbsp;|&nbsp; Delay: ~${inc.delay_min}m</div>
-      <div style="font-size:10px;color:#64748b;margin-top:2px;">Reported ${inc.reported}</div>
-    `), { className:'dark-popup', maxWidth:210 });
+      <div style="font-weight:700;color:${col};">${inc.type}</div>
+      <div style="font-size:12px;margin:3px 0;">Road: <strong style="color:#06b6d4;">${inc.road}</strong></div>
+      <div style="display:flex;gap:8px;font-size:12px;align-items:center;">
+        <span class="badge ${sev}" style="font-size:10px;">${sev}</span>
+        <span>+${inc.delay_min} min delay</span>
+      </div>
+      <div style="font-size:10px;color:#64748b;margin-top:4px;">Reported ${inc.reported}</div>
+    `), { className:'dark-popup', maxWidth:215 });
     _markers.push(m);
   });
 }
 
 function updateMap(data) {
   if (!_map) initMap(data.lat || 19.076, data.lon || 72.877);
-  if (data.google_maps_key) setGoogleApiKey(data.google_maps_key);
+  if (data.tomtom_api_key) setTomtomKey(data.tomtom_api_key);
   clearMarkers();
   if (data.deliveries) addDeliveryMarkers(data.deliveries);
   addEventMarkers(data.events);
-  if (data.traffic) addIncidentMarkers(data.traffic.incidents);
+  if (data.traffic) {
+    addIncidentMarkers(data.traffic.incidents);
+    // Cache zones and redraw overlays if zones panel is on
+    _lastZones = data.traffic.zones || [];
+    if (_zonesOn) _drawZoneCircles(_lastZones);
+  }
 }
 
 /* ────────────────────────────────────────────
@@ -1464,78 +1553,43 @@ function updateEvents(events) {
 }
 
 /* ────────────────────────────────────────────
-   DELIVERIES TABLE
+   TRAFFIC INTELLIGENCE PANEL
 ──────────────────────────────────────────── */
-function rbarHTML(score) {
-  const c = riskColor(score);
-  return `<div class="rbar-wrap"><div class="rbar-fill" style="width:${score}%;background:${c};"></div></div>
-          <div class="rbar-num" style="color:${c};">${score}</div>`;
-}
-
-function renderTable() {
-  const tbody = document.getElementById('tbl-body');
-  const cnt   = document.getElementById('tbl-count');
-  if (!tbody) return;
-
-  let rows = [..._deliveries];
-
-  // Filter
-  if (_filter) {
-    const f = _filter.toLowerCase();
-    rows = rows.filter(d =>
-      ['id','address','driver','package_type','status','priority']
-        .some(k => (d[k] || '').toLowerCase().includes(f))
-    );
-  }
-
-  // Sort
-  rows.sort((a, b) => {
-    const va = a[_sortCol] ?? '', vb = b[_sortCol] ?? '';
-    if (typeof va === 'number') return _sortDir * (va - vb);
-    return _sortDir * String(va).localeCompare(String(vb));
-  });
-
-  if (cnt) cnt.textContent = `${rows.length} deliveries`;
-
-  if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="9" class="empty"><i class="fa fa-search" style="display:inline;margin-right:5px;"></i>No deliveries match filter</td></tr>`;
+function updateTrafficIntel(traffic) {
+  const grid = document.getElementById('traffic-intel-grid');
+  const cnt  = document.getElementById('traffic-intel-count');
+  if (!grid) return;
+  const zones = (traffic || {}).zones || [];
+  if (cnt) cnt.textContent = `${zones.length} zones`;
+  if (!zones.length) {
+    grid.innerHTML = '<div class="empty" style="grid-column:1/-1;padding:20px 0;"><i class="fa fa-circle-info"></i> No zone data</div>';
     return;
   }
-
-  tbody.innerHTML = rows.map(d => {
-    const sc = statusCls(d.status);
-    const factors = (d.risk_factors || [])
-      .slice(0, 3)
-      .map(f => `<span class="factor-tag" title="${f}">${f.length > 30 ? f.slice(0,27)+'…' : f}</span>`)
-      .join('');
-    return `<tr>
-      <td class="td-id">${d.id}</td>
-      <td class="td-addr" title="${d.address}">${d.address}</td>
-      <td class="td-driver">${d.driver}</td>
-      <td><span style="color:var(--text-secondary);">${d.package_type}</span></td>
-      <td><span class="pri-badge ${d.priority}">${d.priority}</span></td>
-      <td class="td-eta">${d.eta}</td>
-      <td><span class="status-badge ${sc}"><span class="sb-dot"></span>${d.status}</span></td>
-      <td>${rbarHTML(d.risk_score || 0)}</td>
-      <td>${factors || '<span style="color:var(--text-muted);font-size:0.70rem;">—</span>'}</td>
-    </tr>`;
+  const incidents = (traffic || {}).incidents || [];
+  // Sort zones worst-first
+  const sorted = [...zones].sort((a,b) => a.flow_ratio - b.flow_ratio);
+  grid.innerHTML = sorted.map(z => {
+    const col = congColor(z.flow_ratio);
+    const pct = (z.flow_ratio * 100).toFixed(0);
+    const relIncs = incidents.filter(i => i.road === z.name);
+    return `
+    <div style="background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:var(--radius-md);padding:12px 14px;position:relative;overflow:hidden;">
+      <div style="position:absolute;top:0;left:0;width:4px;height:100%;background:${col};border-radius:4px 0 0 4px;"></div>
+      <div style="margin-left:8px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <span style="font-weight:600;font-size:0.85rem;color:var(--text-primary);">${z.name}</span>
+          <span style="font-size:0.72rem;font-weight:700;color:${col};padding:2px 7px;background:${col}22;border-radius:4px;">${z.congestion}</span>
+        </div>
+        <div style="background:var(--bg-secondary);border-radius:4px;height:6px;margin-bottom:6px;">
+          <div style="height:6px;border-radius:4px;background:${col};width:${pct}%;transition:width .5s;"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:0.70rem;color:var(--text-muted);">
+          <span>Flow <strong style="color:${col};">${pct}%</strong></span>
+          ${relIncs.length ? `<span style="color:#f97316;"><i class="fa fa-triangle-exclamation"></i> ${relIncs.length} incident${relIncs.length>1?'s':''}</span>` : '<span style="color:var(--color-green);"><i class="fa fa-circle-check"></i> Clear</span>'}
+        </div>
+      </div>
+    </div>`;
   }).join('');
-
-  // Mark sorted column
-  document.querySelectorAll('thead th').forEach(th => {
-    th.classList.toggle('sorted', th.getAttribute('onclick') === `sortTable('${_sortCol}')`);
-  });
-}
-
-function sortTable(col) {
-  _sortDir = (_sortCol === col) ? _sortDir * -1 : -1;
-  _sortCol = col;
-  renderTable();
-}
-
-function filterTable(val) {
-  _filter = val;
-  renderTable();
 }
 
 /* ────────────────────────────────────────────
@@ -1582,7 +1636,7 @@ function updateDashboard(data) {
   updateWeather(data.weather, data.impact);
   updateTraffic(data.traffic, data.impact);
   updateEvents(data.events);
-  renderTable();
+  updateTrafficIntel(data.traffic);
   updateRecs(data.recommendations);
   updateMap(data);
 }
