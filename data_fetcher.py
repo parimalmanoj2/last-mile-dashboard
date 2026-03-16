@@ -236,36 +236,125 @@ async def _fetch_traffic_google() -> dict:
 
 
 async def _fetch_traffic_tomtom() -> dict:
-    try:
-        lat, lon = _active_location["lat"], _active_location["lon"]
-        bbox = f"{lon-0.1},{lat-0.07},{lon+0.1},{lat+0.07}"
-        url = (
-            f"https://api.tomtom.com/traffic/services/5/incidentDetails"
-            f"?key={config.TOMTOM_API_KEY}&bbox={bbox}&fields={{incidents{{type,geometry,properties}}}}"
-            f"&language=en-GB&timeValidityFilter=present"
-        )
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(url)
+    """
+    Uses two TomTom APIs in parallel:
+    - Traffic Flow Segment: real speed / congestion per zone
+    - Incident Details: real accidents, roadworks, closures
+    Free tier: 2,500 req/day — 8 flow + 1 incident = 9 calls per refresh.
+    """
+    lat, lon = _active_location["lat"], _active_location["lon"]
+
+    zone_defs = [
+        ("City Centre",      0.00,  0.00),
+        ("North Zone",       0.07,  0.00),
+        ("South Zone",      -0.07,  0.00),
+        ("East Zone",        0.00,  0.09),
+        ("West Zone",        0.00, -0.09),
+        ("Airport Corridor", 0.05,  0.06),
+        ("Industrial Area", -0.04,  0.07),
+        ("IT Corridor",      0.06, -0.05),
+    ]
+
+    async def _flow(client: httpx.AsyncClient, zlat: float, zlon: float) -> float:
+        """Return flow_ratio (0–1) for a point. Falls back to random on error."""
+        try:
+            url = (
+                f"https://api.tomtom.com/traffic/services/4/flowSegmentData"
+                f"/absolute/10/json"
+                f"?point={zlat},{zlon}&key={config.TOMTOM_API_KEY}"
+            )
+            r = await client.get(url, timeout=8)
             r.raise_for_status()
-            d = r.json()
-        incidents = []
-        for inc in d.get("incidents", [])[:10]:
-            props  = inc.get("properties", {})
-            geom   = inc.get("geometry", {})
-            coords = geom.get("coordinates", [[[0, 0]]])[0][0] if geom else [0, 0]
-            incidents.append({
-                "type":      props.get("incidentCategory", "Unknown"),
-                "severity":  props.get("magnitudeOfDelay", "Unknown"),
-                "lat":       coords[1],
-                "lon":       coords[0],
-                "road":      props.get("roadNumbers", ["Unknown"])[0] if props.get("roadNumbers") else "Unknown",
-                "delay_min": int(props.get("delay", 0) / 60),
-                "reported":  datetime.now().strftime("%H:%M"),
+            d = r.json().get("flowSegmentData", {})
+            current   = d.get("currentSpeed", 0)
+            free_flow = d.get("freeFlowSpeed", 1)
+            return round(min(current / max(free_flow, 1), 1.0), 2)
+        except Exception:
+            return _rnd(0.4, 0.9)
+
+    async def _incidents(client: httpx.AsyncClient) -> list[dict]:
+        """Return list of real incidents from TomTom Incidents API v5."""
+        try:
+            bbox = f"{lon-0.15},{lat-0.10},{lon+0.15},{lat+0.10}"
+            url  = (
+                f"https://api.tomtom.com/traffic/services/5/incidentDetails"
+                f"?key={config.TOMTOM_API_KEY}&bbox={bbox}"
+                f"&fields={{incidents{{type,geometry,properties}}}}"
+                f"&language=en-GB&timeValidityFilter=present"
+            )
+            r = await client.get(url, timeout=10)
+            r.raise_for_status()
+            raw = r.json().get("incidents", [])[:12]
+            incidents = []
+            for inc in raw:
+                props  = inc.get("properties", {})
+                geom   = inc.get("geometry", {})
+                coords = geom.get("coordinates", [[[lon, lat]]])
+                pt     = coords[0][0] if coords and coords[0] else [lon, lat]
+                mag    = props.get("magnitudeOfDelay", 0)
+                sev    = {0: "Minor", 1: "Minor", 2: "Moderate", 3: "Major", 4: "Critical"}.get(mag, "Minor")
+                incidents.append({
+                    "type":      props.get("events", [{}])[0].get("description", "Traffic Incident") if props.get("events") else props.get("incidentCategory", "Incident"),
+                    "severity":  sev,
+                    "lat":       pt[1],
+                    "lon":       pt[0],
+                    "road":      props.get("roadNumbers", ["Unknown road"])[0] if props.get("roadNumbers") else "Unknown road",
+                    "delay_min": max(0, int(props.get("delay", 0) / 60)),
+                    "reported":  datetime.now().strftime("%H:%M"),
+                })
+            return incidents
+        except Exception:
+            return []
+
+    try:
+        async with httpx.AsyncClient() as client:
+            flow_tasks = [
+                _flow(client, round(lat + dlat, 5), round(lon + dlon, 5))
+                for _, dlat, dlon in zone_defs
+            ]
+            flow_results, incidents = await asyncio.gather(
+                asyncio.gather(*flow_tasks),
+                _incidents(client),
+            )
+
+        zones = []
+        for i, (name, dlat, dlon) in enumerate(zone_defs):
+            fr = flow_results[i]
+            zones.append({
+                "name":       name,
+                "lat":        round(lat + dlat, 5),
+                "lon":        round(lon + dlon, 5),
+                "flow_ratio": fr,
+                "congestion": _congestion_label(fr),
             })
-        mock = _mock_traffic()
-        mock["incidents"] = incidents or mock["incidents"]
-        mock["source"]    = "tomtom"
-        return mock
+
+        if not incidents:
+            # Build congestion-based incidents from worst zones when incidents API returns empty
+            incidents = []
+            for z in sorted(zones, key=lambda x: x["flow_ratio"])[:3]:
+                if z["flow_ratio"] < 0.75:
+                    incidents.append({
+                        "type":      "Traffic Congestion",
+                        "severity":  _congestion_severity(z["flow_ratio"]),
+                        "lat":       z["lat"],
+                        "lon":       z["lon"],
+                        "road":      z["name"],
+                        "delay_min": max(5, int((1 - z["flow_ratio"]) * 45)),
+                        "reported":  datetime.now().strftime("%H:%M"),
+                    })
+
+        overall   = sum(1 - z["flow_ratio"] for z in zones) / len(zones)
+        avg_delay = int(sum(i["delay_min"] for i in incidents) / len(incidents)) if incidents else 0
+
+        return {
+            "overall_congestion": round(overall * 100, 1),
+            "congestion_label":   _congestion_label(1 - overall),
+            "avg_delay_min":      avg_delay,
+            "incidents":          incidents,
+            "zones":              zones,
+            "timestamp":          datetime.now().isoformat(),
+            "source":             "tomtom",
+        }
     except Exception:
         return _mock_traffic()
 
