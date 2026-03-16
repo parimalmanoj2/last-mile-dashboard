@@ -20,7 +20,10 @@ import io
 import asyncio
 import httpx
 from datetime import datetime
-from typing import Optional
+from typing import IO
+
+# Maximum rows to load into the dashboard (map + table can't handle millions)
+MAX_DISPLAY = 10_000
 
 # ── column aliases ─────────────────────────────────────────────────────────────
 
@@ -85,9 +88,10 @@ def _normalize_priority(raw: str) -> str:
 
 _geo_cache: dict[str, tuple[float, float]] = {}
 
-async def _geocode(address: str, city: str, pincode: str) -> tuple[float, float]:
-    """Return (lat, lon) for an Indian address. Falls back to (0, 0)."""
-    query = pincode or f"{address} {city} India".strip()
+async def _geocode_query(query: str) -> tuple[float, float]:
+    """Return (lat, lon) for a pincode or city string. Falls back to (0, 0)."""
+    if not query:
+        return 0.0, 0.0
     if query in _geo_cache:
         return _geo_cache[query]
     try:
@@ -107,32 +111,59 @@ async def _geocode(address: str, city: str, pincode: str) -> tuple[float, float]
             return lat, lon
     except Exception:
         pass
+    _geo_cache[query] = (0.0, 0.0)
     return 0.0, 0.0
 
 # ── main parser ───────────────────────────────────────────────────────────────
 
-async def parse_csv(content: bytes, geocode: bool = True) -> tuple[list[dict], list[str]]:
+async def parse_csv(
+    source: "bytes | IO",
+    geocode: bool = True,
+    max_display: int = MAX_DISPLAY,
+) -> tuple[list[dict], list[str], int]:
     """
-    Parse CSV bytes into a list of delivery dicts.
-    Returns (deliveries, warnings).
+    Parse a CSV file (bytes or file-like object) into delivery dicts.
+    Streams rows to avoid loading the whole file into RAM.
+
+    Returns (deliveries, warnings, total_rows).
+    - deliveries: up to max_display rows
+    - total_rows: actual row count in the file (may exceed max_display)
     """
-    text = content.decode("utf-8-sig", errors="replace")
-    # Auto-detect delimiter
-    sample = text[:2048]
-    dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
-    reader = csv.DictReader(io.StringIO(text), dialect=dialect)
+    # Wrap bytes in a text stream; file objects are wrapped via TextIOWrapper
+    if isinstance(source, (bytes, bytearray)):
+        text_stream = io.StringIO(source.decode("utf-8-sig", errors="replace"))
+    else:
+        # source is a SpooledTemporaryFile or similar binary IO from FastAPI
+        text_stream = io.TextIOWrapper(source, encoding="utf-8-sig", errors="replace", newline="")
+
+    # Auto-detect delimiter from first 4 KB
+    try:
+        sample = text_stream.read(4096)
+        text_stream.seek(0)
+        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+    except Exception:
+        dialect = csv.excel
+
+    reader = csv.DictReader(text_stream, dialect=dialect)
     headers = reader.fieldnames or []
     mapping = _map_columns(list(headers))
-    warnings = []
+    warnings: list[str] = []
 
     if "address" not in mapping and "pincode" not in mapping:
-        warnings.append("No address or pincode column found — deliveries will be placed at city centre")
+        warnings.append("No address or pincode column found — deliveries placed at city centre")
 
-    deliveries = []
-    tasks = []
-    rows = list(reader)
+    deliveries: list[dict] = []
+    # geo_key -> list of delivery indices that need this location
+    geo_needed: dict[str, list[int]] = {}
+    total_rows = 0
 
-    for i, row in enumerate(rows):
+    for i, row in enumerate(reader):
+        total_rows += 1
+
+        # Only keep up to max_display rows; still count remaining for the summary
+        if total_rows > max_display:
+            continue
+
         delivery_id = _get(row, mapping, "id") or f"DLV-{1000 + i}"
         address     = _get(row, mapping, "address")
         city        = _get(row, mapping, "city")
@@ -149,7 +180,6 @@ async def parse_csv(content: bytes, geocode: bool = True) -> tuple[list[dict], l
         weight      = _get(row, mapping, "weight")
         value       = _get(row, mapping, "value")
 
-        # Parse lat/lon if present
         try:
             lat = float(lat_raw) if lat_raw else None
             lon = float(lon_raw) if lon_raw else None
@@ -174,35 +204,38 @@ async def parse_csv(content: bytes, geocode: bool = True) -> tuple[list[dict], l
             "order_value":  value,
             "risk_score":   0,
             "risk_factors": [],
-            "needs_geocode": lat is None and geocode,
-            "_geo_query":   pincode or f"{address} {city} India".strip(),
         }
+
+        if lat is None and geocode:
+            geo_key = pincode or f"{address} {city} India".strip()
+            if geo_key:
+                geo_needed.setdefault(geo_key, []).append(len(deliveries))
+
         deliveries.append(d)
 
-    # Geocode in batches (rate-limit: 1 req/sec for Nominatim)
-    if geocode:
-        needs_geo = [d for d in deliveries if d.pop("needs_geocode", False)]
-        for d in deliveries:
-            d.pop("needs_geocode", None)
+    # Close the text wrapper without closing the underlying file
+    if not isinstance(source, (bytes, bytearray)):
+        text_stream.detach()
 
-        for d in needs_geo:
-            query = d.pop("_geo_query", "")
-            if query:
-                lat, lon = await _geocode("", "", query)
-                d["lat"] = lat
-                d["lon"] = lon
-                await asyncio.sleep(1.1)  # Nominatim rate limit
-            else:
-                d.pop("_geo_query", None)
+    if total_rows > max_display:
+        warnings.append(
+            f"File contains {total_rows:,} rows — displaying first {max_display:,}. "
+            "Upload a filtered/sampled file to see a different subset."
+        )
 
-    for d in deliveries:
-        d.pop("_geo_query", None)
-        d.pop("needs_geocode", None)
+    # Geocode unique locations only (deduplicated), respecting Nominatim rate limit
+    if geocode and geo_needed:
+        for geo_key, indices in geo_needed.items():
+            lat, lon = await _geocode_query(geo_key)
+            for idx in indices:
+                deliveries[idx]["lat"] = lat
+                deliveries[idx]["lon"] = lon
+            await asyncio.sleep(1.1)  # Nominatim: max 1 req/sec
 
     if not deliveries:
         warnings.append("No rows found in CSV")
 
-    return deliveries, warnings
+    return deliveries, warnings, total_rows
 
 
 def generate_template_csv() -> str:

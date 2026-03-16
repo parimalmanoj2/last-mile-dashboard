@@ -6,7 +6,7 @@ from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, Query, UploadFile, File
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, Response
 from fastapi.templating import Jinja2Templates
 from fastapi import Request
 from pydantic import BaseModel
@@ -25,6 +25,9 @@ templates  = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 # ── in-memory state ─────────────────────────────────────────────────────────────
 _state: dict = {}
 _history: deque = deque(maxlen=288)   # 24 h @ 5-min intervals
+
+# ── SSE subscriber queues ────────────────────────────────────────────────────────
+_sse_queues: set[asyncio.Queue] = set()
 
 # ── background refresh ──────────────────────────────────────────────────────────
 
@@ -66,6 +69,14 @@ async def refresh_all():
         "events":          impact["events_score"],
     })
 
+    # ── notify SSE subscribers ──────────────────────────────────────────────────
+    payload = {**_state, "_history": list(_history)}
+    for q in list(_sse_queues):
+        try:
+            q.put_nowait(payload)
+        except asyncio.QueueFull:
+            pass
+
 # ── startup / scheduler ─────────────────────────────────────────────────────────
 
 scheduler = AsyncIOScheduler()
@@ -83,6 +94,10 @@ async def shutdown():
 
 # ── routes ──────────────────────────────────────────────────────────────────────
 
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return Response(status_code=204)
+
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     return templates.TemplateResponse("dashboard.html", {"request": request})
@@ -99,6 +114,40 @@ async def api_history():
 async def api_refresh():
     await refresh_all()
     return {"status": "ok", "updated": _state.get("last_updated")}
+
+@app.get("/api/stream")
+async def api_stream(request: Request):
+    """SSE endpoint — pushes dashboard + history updates to the browser in real time."""
+    queue: asyncio.Queue = asyncio.Queue(maxsize=10)
+    _sse_queues.add(queue)
+
+    # Send current state immediately so the client doesn't wait for the next refresh
+    if _state:
+        await queue.put({**_state, "_history": list(_history)})
+
+    async def event_generator():
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    data = await asyncio.wait_for(queue.get(), timeout=25)
+                    yield f"data: {json.dumps(data)}\n\n"
+                except asyncio.TimeoutError:
+                    # Keepalive comment to prevent proxies from closing the connection
+                    yield ": keepalive\n\n"
+        finally:
+            _sse_queues.discard(queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
 
 @app.get("/api/search-location")
 async def api_search_location(q: str = Query(..., min_length=2)):
@@ -126,19 +175,19 @@ async def api_upload_deliveries(file: UploadFile = File(...)):
     """Upload a CSV of delivery orders — replaces simulated data with real orders."""
     if not file.filename.endswith(".csv"):
         return JSONResponse({"error": "Only CSV files are supported"}, status_code=400)
-    content = await file.read()
-    if len(content) > 5 * 1024 * 1024:  # 5 MB limit
-        return JSONResponse({"error": "File too large (max 5 MB)"}, status_code=400)
-    deliveries, warnings = await csv_loader.parse_csv(content, geocode=True)
+    deliveries, warnings, total_rows = await csv_loader.parse_csv(file.file, geocode=True)
     if not deliveries:
         return JSONResponse({"error": "No valid rows found in CSV", "warnings": warnings}, status_code=400)
     df.set_uploaded_deliveries(deliveries)
     await refresh_all()
+    skipped = total_rows - len(deliveries)
     return {
-        "status":    "ok",
-        "count":     len(deliveries),
-        "warnings":  warnings,
-        "updated":   _state.get("last_updated"),
+        "status":     "ok",
+        "count":      len(deliveries),
+        "total_rows": total_rows,
+        "skipped":    skipped,
+        "warnings":   warnings,
+        "updated":    _state.get("last_updated"),
     }
 
 @app.get("/api/download-template")

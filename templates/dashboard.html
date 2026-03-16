@@ -182,6 +182,22 @@
       transition: transform 0.22s ease, box-shadow 0.22s ease;
     }
     .stat-card:hover { transform: translateY(-2px); box-shadow: 0 6px 24px rgba(0,0,0,0.45); }
+    .stat-card.clickable { cursor: pointer; }
+    .stat-card.clickable:hover {
+      border-color: var(--c-accent, var(--accent-blue));
+    }
+    .stat-drill-btn {
+      display: inline-flex; align-items: center; gap: 4px;
+      margin-top: 10px;
+      font-size: 0.68rem; font-weight: 600; letter-spacing: 0.3px;
+      color: var(--c-accent, var(--accent-blue));
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--c-accent, var(--accent-blue));
+      border-radius: 4px; padding: 3px 8px;
+      opacity: 0.75; transition: opacity 0.18s;
+      pointer-events: none;
+    }
+    .stat-card.clickable:hover .stat-drill-btn { opacity: 1; }
     .stat-card::before {
       content: '';
       position: absolute; top: 0; left: 0; right: 0; height: 3px;
@@ -509,6 +525,107 @@
     /* ── Responsive ────────────────────────────────────── */
     @media (max-width: 900px) { .header { flex-direction: column; align-items: flex-start; } }
     @media (max-width: 640px) { .recs-grid { grid-template-columns: 1fr; } }
+
+    /* ── Drill-Down Modal ───────────────────────────────── */
+    .dd-overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,.72); z-index: 8000;
+      align-items: center; justify-content: center;
+      padding: 20px;
+    }
+    .dd-overlay.open { display: flex; }
+
+    .dd-panel {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      width: 100%; max-width: 1100px;
+      max-height: 88vh;
+      display: flex; flex-direction: column;
+      box-shadow: 0 24px 64px rgba(0,0,0,.6);
+      animation: dd-slide-in 0.22s ease;
+    }
+    @keyframes dd-slide-in {
+      from { opacity:0; transform: translateY(18px) scale(0.98); }
+      to   { opacity:1; transform: translateY(0)    scale(1); }
+    }
+
+    .dd-header {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      padding: 20px 22px 14px;
+      border-bottom: 1px solid var(--border-color);
+      flex-shrink: 0;
+    }
+    .dd-title-group h2 {
+      font-size: 1.15rem; font-weight: 800; display: flex; align-items: center; gap: 9px;
+    }
+    .dd-title-icon { font-size: 1.2rem; }
+    .dd-subtitle { font-size: 0.78rem; color: var(--text-muted); margin-top: 3px; }
+
+    .dd-header-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+    .dd-search {
+      background: var(--bg-tertiary); border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm); color: var(--text-primary);
+      padding: 6px 12px; font-size: 0.80rem; width: 200px;
+    }
+    .dd-search:focus { outline: none; border-color: var(--accent-blue); }
+    .dd-btn {
+      padding: 6px 13px; border-radius: var(--radius-sm); border: 1px solid var(--border-color);
+      background: var(--bg-tertiary); color: var(--text-secondary);
+      font-size: 0.78rem; font-weight: 600; cursor: pointer;
+      display: flex; align-items: center; gap: 5px; transition: var(--transition);
+    }
+    .dd-btn:hover { background: var(--border-color); color: var(--text-primary); }
+    .dd-btn-close {
+      background: none; border: none; color: var(--text-muted);
+      font-size: 1.2rem; cursor: pointer; padding: 4px 8px; line-height: 1;
+      border-radius: var(--radius-sm); transition: var(--transition);
+    }
+    .dd-btn-close:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+
+    .dd-summary-row {
+      display: flex; gap: 12px; flex-wrap: wrap;
+      padding: 12px 22px; border-bottom: 1px solid var(--border-color);
+      flex-shrink: 0;
+    }
+    .dd-kpi {
+      background: var(--bg-tertiary); border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm); padding: 8px 14px; min-width: 100px;
+    }
+    .dd-kpi-label { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.6px; color: var(--text-muted); }
+    .dd-kpi-val   { font-size: 1.3rem; font-weight: 800; margin-top: 2px; }
+
+    .dd-table-wrap {
+      overflow: auto; flex: 1;
+    }
+    .dd-table {
+      width: 100%; border-collapse: collapse; font-size: 0.80rem;
+    }
+    .dd-table thead th {
+      position: sticky; top: 0; z-index: 10;
+      background: var(--bg-tertiary);
+      padding: 9px 12px; text-align: left;
+      font-size: 0.68rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.6px;
+      color: var(--text-muted); white-space: nowrap;
+      border-bottom: 1px solid var(--border-color);
+      cursor: pointer; user-select: none;
+      transition: color 0.15s;
+    }
+    .dd-table thead th:hover { color: var(--text-primary); }
+    .dd-table thead th.dd-sorted { color: var(--accent-cyan); }
+    .dd-table tbody tr {
+      border-bottom: 1px solid rgba(51,65,85,0.5);
+      transition: background 0.12s;
+    }
+    .dd-table tbody tr:hover { background: rgba(255,255,255,0.03); }
+    .dd-table td { padding: 8px 12px; vertical-align: middle; }
+
+    .dd-empty {
+      text-align: center; padding: 48px 20px;
+      color: var(--text-muted); font-size: 0.90rem;
+    }
+    .dd-empty i { display: block; font-size: 2rem; margin-bottom: 10px; opacity: 0.4; }
   </style>
 </head>
 <body>
@@ -608,8 +725,9 @@
 
     <div class="header-right">
       <div class="last-updated"><i class="fa fa-clock"></i> Updated: <span id="hdr-updated">—</span></div>
-      <div class="countdown-pill">
-        <i class="fa fa-rotate"></i> Refresh in <span id="countdown-val">30</span>s
+      <div class="countdown-pill" id="sse-status-pill">
+        <i class="fa fa-circle" id="sse-dot" style="color:var(--color-gray);font-size:0.6rem;"></i>
+        <span id="sse-status-text">Connecting…</span>
       </div>
       <div class="hdr-risk-badge" id="hdr-risk-badge">
         <span class="pulse-dot"></span>
@@ -639,7 +757,7 @@
         ondrop="handleDrop(event)">
         <div style="font-size:2rem;margin-bottom:8px;">📂</div>
         <div style="font-weight:600;margin-bottom:4px;">Click to browse or drag & drop</div>
-        <div style="font-size:0.78rem;color:#64748b;">CSV files only · Max 5 MB</div>
+        <div style="font-size:0.78rem;color:#64748b;">CSV files only · Large files supported</div>
         <input type="file" id="csvFileInput" accept=".csv" style="display:none" onchange="handleFileSelect(this.files[0])"/>
       </div>
 
@@ -686,35 +804,41 @@
        STAT CARDS
   ═══════════════════════════════════════ -->
   <div class="stats-row">
-    <div class="stat-card s-blue">
+    <div class="stat-card s-blue clickable" onclick="openDrilldown('all')">
       <div class="stat-label"><i class="fa fa-boxes-stacked"></i> Total Deliveries</div>
       <div class="stat-value" id="sc-total">—</div>
       <div class="stat-sub">active fleet today</div>
+      <div class="stat-drill-btn"><i class="fa fa-table-list"></i> View All</div>
     </div>
-    <div class="stat-card s-green">
+    <div class="stat-card s-green clickable" onclick="openDrilldown('In Transit')">
       <div class="stat-label"><i class="fa fa-truck-fast"></i> On Time</div>
       <div class="stat-value" id="sc-ontime">—</div>
       <div class="stat-sub" id="sc-ontime-sub">in transit</div>
+      <div class="stat-drill-btn"><i class="fa fa-table-list"></i> View Details</div>
     </div>
-    <div class="stat-card s-orange">
+    <div class="stat-card s-orange clickable" onclick="openDrilldown('At Risk')">
       <div class="stat-label"><i class="fa fa-triangle-exclamation"></i> At Risk</div>
       <div class="stat-value" id="sc-atrisk">—</div>
       <div class="stat-sub">need attention</div>
+      <div class="stat-drill-btn"><i class="fa fa-table-list"></i> View Details</div>
     </div>
-    <div class="stat-card s-red">
+    <div class="stat-card s-red clickable" onclick="openDrilldown('Delayed')">
       <div class="stat-label"><i class="fa fa-circle-xmark"></i> Delayed</div>
       <div class="stat-value" id="sc-delayed">—</div>
       <div class="stat-sub" id="sc-delayed-sub">avg delay loading…</div>
+      <div class="stat-drill-btn"><i class="fa fa-table-list"></i> View Details</div>
     </div>
-    <div class="stat-card s-gray">
+    <div class="stat-card s-gray clickable" onclick="openDrilldown('Delivered')">
       <div class="stat-label"><i class="fa fa-circle-check"></i> Delivered</div>
       <div class="stat-value" id="sc-delivered">—</div>
       <div class="stat-sub">completed today</div>
+      <div class="stat-drill-btn"><i class="fa fa-table-list"></i> View Details</div>
     </div>
-    <div class="stat-card s-cyan">
+    <div class="stat-card s-cyan clickable" onclick="openDrilldown('success')">
       <div class="stat-label"><i class="fa fa-chart-line"></i> Success Rate</div>
       <div class="stat-value" id="sc-success"><span id="sc-success-val">—</span><span style="font-size:1rem;font-weight:400;">%</span></div>
       <div class="stat-sub">on-time + delivered</div>
+      <div class="stat-drill-btn"><i class="fa fa-table-list"></i> View Details</div>
     </div>
   </div>
 
@@ -912,8 +1036,7 @@ let _deliveries  = [];
 let _sortCol     = 'risk_score';
 let _sortDir     = -1;
 let _filter      = '';
-let _countdown   = 30;
-let _cdTimer     = null;
+let _sse         = null;
 
 /* ────────────────────────────────────────────
    COLOR / LABEL HELPERS
@@ -1460,17 +1583,22 @@ function rmToast(el) {
 }
 
 /* ────────────────────────────────────────────
-   COUNTDOWN
+   SSE STATUS
 ──────────────────────────────────────────── */
-function startCountdown(sec) {
-  _countdown = sec;
-  clearInterval(_cdTimer);
-  const el = document.getElementById('countdown-val');
-  _cdTimer = setInterval(() => {
-    _countdown--;
-    if (el) el.textContent = Math.max(_countdown, 0);
-    if (_countdown <= 0) clearInterval(_cdTimer);
-  }, 1000);
+function setSseStatus(state) {
+  const dot  = document.getElementById('sse-dot');
+  const text = document.getElementById('sse-status-text');
+  if (!dot || !text) return;
+  if (state === 'live') {
+    dot.style.color  = 'var(--color-green)';
+    text.textContent = 'Live';
+  } else if (state === 'reconnecting') {
+    dot.style.color  = 'var(--color-yellow)';
+    text.textContent = 'Reconnecting…';
+  } else {
+    dot.style.color  = 'var(--color-gray)';
+    text.textContent = 'Connecting…';
+  }
 }
 
 /* ────────────────────────────────────────────
@@ -1505,7 +1633,6 @@ async function forceRefresh() {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     await Promise.all([fetchDashboard(), fetchHistory()]);
     toast('Dashboard refreshed successfully', 'success');
-    startCountdown(30);
   } catch(e) {
     toast('Refresh failed — showing last known data', 'error');
   } finally {
@@ -1514,15 +1641,42 @@ async function forceRefresh() {
 }
 
 /* ────────────────────────────────────────────
-   AUTO-REFRESH
+   SSE — REAL-TIME UPDATES
 ──────────────────────────────────────────── */
+function connectSSE() {
+  if (_sse) { _sse.close(); }
+  setSseStatus('connecting');
+  _sse = new EventSource('/api/stream');
+
+  _sse.onopen = () => {
+    setSseStatus('live');
+  };
+
+  _sse.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      const history = data._history || [];
+      // Strip internal key before passing to dashboard renderer
+      const { _history, ...dashData } = data;
+      updateDashboard(dashData);
+      if (history.length) updateHistory(history);
+      setSseStatus('live');
+    } catch(err) {
+      console.error('SSE parse error:', err);
+    }
+  };
+
+  _sse.onerror = () => {
+    setSseStatus('reconnecting');
+    // Browser auto-reconnects EventSource; just update status
+  };
+}
+
 async function boot() {
   initChart();
-  await fetchDashboard();
-  await fetchHistory();
-  startCountdown(30);
-  setInterval(async () => { await fetchDashboard(); startCountdown(30); }, 30000);
-  setInterval(fetchHistory, 60000);
+  // Load initial data via normal fetch so the page isn't blank while SSE connects
+  await Promise.all([fetchDashboard(), fetchHistory()]);
+  connectSSE();
 }
 
 document.addEventListener('DOMContentLoaded', boot);
@@ -1671,6 +1825,174 @@ function handleFileSelect(file) {
   btn.style.opacity = '1';
 }
 
+/* ────────────────────────────────────────────
+   DRILL-DOWN MODAL
+──────────────────────────────────────────── */
+let _ddFilter   = 'all';
+let _ddSearch   = '';
+let _ddSortCol  = 'risk_score';
+let _ddSortDir  = -1;
+
+const _ddConfig = {
+  'all':        { title: 'All Deliveries',        icon: '📦', color: 'var(--accent-blue)',   accentVar: '--accent-blue' },
+  'In Transit': { title: 'On-Time Shipments',     icon: '🚚', color: 'var(--color-green)',  accentVar: '--color-green' },
+  'At Risk':    { title: 'At-Risk Shipments',     icon: '⚠️', color: 'var(--color-orange)', accentVar: '--color-orange' },
+  'Delayed':    { title: 'Delayed Shipments',     icon: '🔴', color: 'var(--color-red)',    accentVar: '--color-red' },
+  'Delivered':  { title: 'Completed Deliveries',  icon: '✅', color: 'var(--color-gray)',   accentVar: '--color-gray' },
+  'success':    { title: 'Successful Deliveries', icon: '📈', color: 'var(--accent-cyan)',  accentVar: '--accent-cyan' },
+};
+
+function _getDrillRows() {
+  if (_ddFilter === 'all')     return [..._deliveries];
+  if (_ddFilter === 'success') return _deliveries.filter(d => d.status === 'In Transit' || d.status === 'Delivered');
+  return _deliveries.filter(d => d.status === _ddFilter);
+}
+
+function openDrilldown(filterType) {
+  _ddFilter  = filterType;
+  _ddSearch  = '';
+  _ddSortCol = 'risk_score';
+  _ddSortDir = -1;
+  const cfg  = _ddConfig[filterType] || _ddConfig['all'];
+
+  document.getElementById('dd-icon').textContent   = cfg.icon;
+  document.getElementById('dd-title').textContent  = cfg.title;
+  document.getElementById('dd-search').value       = '';
+
+  renderDrilldownSummary();
+  renderDrilldownTable();
+  document.getElementById('drilldown-overlay').classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeDrilldown() {
+  document.getElementById('drilldown-overlay').classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+function renderDrilldownSummary() {
+  const rows  = _getDrillRows();
+  const total = rows.length;
+  const avgRisk = total ? Math.round(rows.reduce((s, d) => s + (d.risk_score || 0), 0) / total) : 0;
+  const highRisk = rows.filter(d => (d.risk_score || 0) >= 60).length;
+  const express  = rows.filter(d => d.priority === 'Express' || d.priority === 'Same-Day').length;
+
+  const cfg = _ddConfig[_ddFilter] || _ddConfig['all'];
+  const kpis = [
+    { label: 'Shipments',   val: total,    color: cfg.color },
+    { label: 'Avg Risk',    val: avgRisk,  color: riskColor(avgRisk) },
+    { label: 'High Risk',   val: highRisk, color: highRisk > 0 ? 'var(--color-red)' : 'var(--color-green)' },
+    { label: 'Express / Same-Day', val: express, color: 'var(--accent-cyan)' },
+  ];
+
+  // Add status breakdown for 'all' view
+  if (_ddFilter === 'all') {
+    const counts = {};
+    _deliveries.forEach(d => { counts[d.status] = (counts[d.status] || 0) + 1; });
+    ['In Transit','At Risk','Delayed','Delivered'].forEach(s => {
+      if (counts[s]) kpis.push({ label: s, val: counts[s], color: statusColor(s) });
+    });
+  }
+
+  document.getElementById('dd-summary').innerHTML = kpis.map(k => `
+    <div class="dd-kpi">
+      <div class="dd-kpi-label">${k.label}</div>
+      <div class="dd-kpi-val" style="color:${k.color};">${k.val}</div>
+    </div>`).join('');
+
+  document.getElementById('dd-subtitle').textContent =
+    `${total} shipment${total !== 1 ? 's' : ''} · sorted by risk score`;
+}
+
+function ddSort(col) {
+  _ddSortDir = (_ddSortCol === col) ? _ddSortDir * -1 : -1;
+  _ddSortCol = col;
+  renderDrilldownTable();
+}
+
+function renderDrilldownTable() {
+  const tbody   = document.getElementById('dd-tbody');
+  const search  = (document.getElementById('dd-search').value || '').toLowerCase().trim();
+  let rows      = _getDrillRows();
+
+  if (search) {
+    rows = rows.filter(d =>
+      ['id','address','driver','package_type','status','priority','eta']
+        .some(k => (d[k] || '').toLowerCase().includes(search))
+    );
+  }
+
+  rows.sort((a, b) => {
+    const va = a[_ddSortCol] ?? '', vb = b[_ddSortCol] ?? '';
+    if (typeof va === 'number') return _ddSortDir * (va - vb);
+    return _ddSortDir * String(va).localeCompare(String(vb));
+  });
+
+  // Update subtitle count
+  const sub = document.getElementById('dd-subtitle');
+  if (sub) sub.textContent = `${rows.length} shipment${rows.length !== 1 ? 's' : ''}${search ? ' matching "' + search + '"' : ''}`;
+
+  // Mark sorted column
+  document.querySelectorAll('.dd-table thead th').forEach(th => {
+    th.classList.toggle('dd-sorted', th.getAttribute('onclick') === `ddSort('${_ddSortCol}')`);
+  });
+
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="9"><div class="dd-empty"><i class="fa fa-search"></i>No shipments found</div></td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = rows.map(d => {
+    const sc      = statusCls(d.status);
+    const factors = (d.risk_factors || []).slice(0, 3)
+      .map(f => `<span class="factor-tag" title="${f}">${f.length > 28 ? f.slice(0,25)+'…' : f}</span>`)
+      .join('');
+    return `<tr>
+      <td class="td-id">${d.id}</td>
+      <td class="td-addr" title="${d.address}">${d.address}</td>
+      <td class="td-driver">${d.driver}</td>
+      <td><span style="color:var(--text-secondary);">${d.package_type}</span></td>
+      <td><span class="pri-badge ${d.priority}">${d.priority}</span></td>
+      <td class="td-eta">${d.eta}</td>
+      <td><span class="status-badge ${sc}"><span class="sb-dot"></span>${d.status}</span></td>
+      <td>${rbarHTML(d.risk_score || 0)}</td>
+      <td>${factors || '<span style="color:var(--text-muted);font-size:0.70rem;">—</span>'}</td>
+    </tr>`;
+  }).join('');
+}
+
+function exportDrilldown() {
+  const search = (document.getElementById('dd-search').value || '').toLowerCase().trim();
+  let rows = _getDrillRows();
+  if (search) {
+    rows = rows.filter(d =>
+      ['id','address','driver','package_type','status','priority','eta']
+        .some(k => (d[k] || '').toLowerCase().includes(search))
+    );
+  }
+
+  const cols = ['id','address','driver','package_type','priority','eta','status','risk_score'];
+  const header = ['Order ID','Address','Driver','Package Type','Priority','ETA','Status','Risk Score'];
+  const lines  = [
+    header.join(','),
+    ...rows.map(d => cols.map(c => `"${(d[c] ?? '').toString().replace(/"/g, '""')}"`).join(','))
+  ];
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  const cfg  = _ddConfig[_ddFilter] || _ddConfig['all'];
+  a.download = `${cfg.title.replace(/\s+/g,'-').toLowerCase()}-${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  toast(`Downloaded ${rows.length} rows`, 'success', 2500);
+}
+
+// Close on Escape key
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeDrilldown();
+});
+
 async function submitUpload() {
   if (!_uploadFile) return;
   const btn     = document.getElementById('uploadBtn');
@@ -1702,11 +2024,18 @@ async function submitUpload() {
       return;
     }
 
-    status.textContent = `✅ ${data.count} deliveries loaded successfully!`;
+    let msg = `✅ ${data.count.toLocaleString()} deliveries loaded`;
+    if (data.total_rows && data.total_rows > data.count) {
+      msg += ` (of ${data.total_rows.toLocaleString()} total rows)`;
+    }
+    status.textContent = msg;
     if (data.warnings?.length) {
       status.textContent += ' ⚠️ ' + data.warnings.join(' | ');
     }
-    toast(`📦 ${data.count} real deliveries loaded from CSV`, 'success');
+    const toastMsg = data.skipped
+      ? `📦 ${data.count.toLocaleString()} deliveries loaded — ${data.skipped.toLocaleString()} rows skipped (display cap)`
+      : `📦 ${data.count.toLocaleString()} deliveries loaded from CSV`;
+    toast(toastMsg, 'success');
     await fetchDashboard();
     setTimeout(closeUploadModal, 2000);
   } catch(e) {
@@ -1717,6 +2046,51 @@ async function submitUpload() {
   }
 }
 </script>
+
+<!-- ═══════════════════════════════════════
+     DRILL-DOWN MODAL
+════════════════════════════════════════ -->
+<div id="drilldown-overlay" class="dd-overlay" onclick="if(event.target===this)closeDrilldown()">
+  <div class="dd-panel">
+
+    <!-- Header -->
+    <div class="dd-header">
+      <div class="dd-title-group">
+        <h2><span class="dd-title-icon" id="dd-icon">📦</span> <span id="dd-title">Deliveries</span></h2>
+        <div class="dd-subtitle" id="dd-subtitle">Loading…</div>
+      </div>
+      <div class="dd-header-actions">
+        <input class="dd-search" id="dd-search" type="text" placeholder="🔍 Search ID, address, driver…" oninput="renderDrilldownTable()">
+        <button class="dd-btn" onclick="exportDrilldown()"><i class="fa fa-download"></i> Export CSV</button>
+        <button class="dd-btn-close" onclick="closeDrilldown()" title="Close">✕</button>
+      </div>
+    </div>
+
+    <!-- KPI summary row -->
+    <div class="dd-summary-row" id="dd-summary"></div>
+
+    <!-- Table -->
+    <div class="dd-table-wrap">
+      <table class="dd-table">
+        <thead>
+          <tr>
+            <th onclick="ddSort('id')">Order ID</th>
+            <th onclick="ddSort('address')">Address</th>
+            <th onclick="ddSort('driver')">Driver</th>
+            <th onclick="ddSort('package_type')">Package</th>
+            <th onclick="ddSort('priority')">Priority</th>
+            <th onclick="ddSort('eta')">ETA</th>
+            <th onclick="ddSort('status')">Status</th>
+            <th onclick="ddSort('risk_score')">Risk</th>
+            <th>Risk Factors</th>
+          </tr>
+        </thead>
+        <tbody id="dd-tbody"></tbody>
+      </table>
+    </div>
+
+  </div>
+</div>
 
 <!-- Leaflet popup dark theme override -->
 <style>
