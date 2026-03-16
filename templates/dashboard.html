@@ -970,7 +970,10 @@
       <div class="card">
         <div class="card-header-row">
           <div class="card-title" style="margin-bottom:0;"><i class="fa fa-calendar-star"></i> Today's Events</div>
-          <span class="section-count" id="ev-count">0</span>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span id="ev-source-badge" style="font-size:0.62rem;font-weight:700;padding:2px 7px;border-radius:4px;display:none;"></span>
+            <span class="section-count" id="ev-count">0</span>
+          </div>
         </div>
         <div class="ev-list" id="ev-list">
           <div class="empty"><i class="fa fa-calendar-xmark"></i>No events today</div>
@@ -1434,6 +1437,13 @@ function updateEvents(events) {
   const list = document.getElementById('ev-list');
   const cnt  = document.getElementById('ev-count');
   if (cnt) cnt.textContent = (events || []).length;
+
+  // Determine dominant source for badge
+  const sources = [...new Set((events || []).map(e => e.source).filter(Boolean))];
+  const isMock  = sources.length === 0 || (sources.length === 1 && sources[0] === 'mock');
+  const sourceLabel = isMock ? 'mock' : sources.filter(s => s !== 'mock').join('+');
+  _renderSourceBadge('ev-source-badge', isMock ? 'mock' : sourceLabel);
+
   if (!list) return;
   if (!events || !events.length) {
     list.innerHTML = '<div class="empty"><i class="fa fa-calendar-xmark"></i>No events today</div>';

@@ -404,15 +404,129 @@ def _mock_events() -> list[dict]:
         })
     return events
 
-async def fetch_events() -> list[dict]:
-    if not config.TICKETMASTER_API_KEY:
-        return _mock_events()
+def _event_impact(attendance: int) -> str:
+    if attendance > 50000:   return "Critical"
+    if attendance > 20000:   return "High"
+    if attendance > 5000:    return "Medium"
+    return "Low"
+
+
+async def _fetch_public_holidays() -> list[dict]:
+    """Fetch Indian public holidays for today from Nager.Date (free, no key)."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    year  = datetime.now().year
+    lat, lon = _active_location["lat"], _active_location["lon"]
     try:
+        url = f"https://date.nager.at/api/v3/PublicHolidays/{year}/IN"
+        async with httpx.AsyncClient(timeout=8) as client:
+            r = await client.get(url, headers={"User-Agent": "LastMileIntelDashboard/1.0"})
+            r.raise_for_status()
+            holidays = r.json()
+        events = []
+        for h in holidays:
+            if h.get("date") != today:
+                continue
+            name = h.get("name", "Public Holiday")
+            local = h.get("localName", name)
+            events.append({
+                "name":          f"{local} ({name})" if local != name else name,
+                "venue":         "National Holiday — All India",
+                "category":      "Public Holiday",
+                "attendance":    500000,
+                "start":         "00:00",
+                "end":           "23:59",
+                "lat":           round(lat, 5),
+                "lon":           round(lon, 5),
+                "impact":        "Critical",
+                "road_closures": True,
+                "parking_impact": True,
+                "source":        "nager",
+            })
+        return events
+    except Exception:
+        return []
+
+
+async def _fetch_predicthq_events() -> list[dict]:
+    """Fetch today's live events from PredictHQ within 25 km of active location."""
+    lat, lon = _active_location["lat"], _active_location["lon"]
+    today    = datetime.now().strftime("%Y-%m-%d")
+    try:
+        url = (
+            "https://api.predicthq.com/v1/events/"
+            f"?within=25km@{lat},{lon}"
+            f"&start.gte={today}&start.lte={today}"
+            "&sort=-rank&limit=10&country=IN"
+            "&category=concerts,conferences,expos,festivals,"
+            "performing-arts,sports,community,politics"
+        )
+        headers = {
+            "Authorization": f"Bearer {config.PREDICTHQ_TOKEN}",
+            "Accept": "application/json",
+        }
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(url, headers=headers)
+            r.raise_for_status()
+            results = r.json().get("results", [])
+        events = []
+        for ev in results:
+            att   = ev.get("phq_attendance") or ev.get("rank", 10) * 500
+            geo   = ev.get("geo", {}).get("geometry", {}).get("coordinates", [lon, lat])
+            start_dt = ev.get("start", "")
+            end_dt   = ev.get("end", "")
+            start = start_dt[11:16] if len(start_dt) >= 16 else "TBD"
+            end   = end_dt[11:16]   if len(end_dt)   >= 16 else "TBD"
+            events.append({
+                "name":          ev.get("title", "Event"),
+                "venue":         ev.get("entities", [{}])[0].get("name", _active_location["name"]) if ev.get("entities") else _active_location["name"],
+                "category":      ev.get("category", "Other").replace("-", " ").title(),
+                "attendance":    int(att),
+                "start":         start,
+                "end":           end,
+                "lat":           round(geo[1] if len(geo) > 1 else lat, 5),
+                "lon":           round(geo[0] if len(geo) > 0 else lon, 5),
+                "impact":        _event_impact(int(att)),
+                "road_closures": int(att) > 10000,
+                "parking_impact": int(att) > 5000,
+                "source":        "predicthq",
+            })
+        return events
+    except Exception:
+        return []
+
+
+async def fetch_events() -> list[dict]:
+    """
+    Fetch today's live events. Sources (merged):
+    - Nager.Date  : Indian public holidays — always free, no key required
+    - PredictHQ   : live events near location (set PREDICTHQ_TOKEN)
+    - Ticketmaster: fallback if TICKETMASTER_API_KEY set
+    Falls back to mock only when all live sources return nothing.
+    """
+    # Always fetch holidays — no key needed
+    holidays = await _fetch_public_holidays()
+
+    # Fetch live events from whichever service is configured
+    if config.PREDICTHQ_TOKEN:
+        live = await _fetch_predicthq_events()
+    elif config.TICKETMASTER_API_KEY:
+        live = await _fetch_ticketmaster_events()
+    else:
+        live = []
+
+    combined = holidays + live
+    return combined if combined else _mock_events()
+
+
+async def _fetch_ticketmaster_events() -> list[dict]:
+    """Ticketmaster fallback (kept for backward compatibility)."""
+    try:
+        lat, lon = _active_location["lat"], _active_location["lon"]
         url = (
             f"https://app.ticketmaster.com/discovery/v2/events.json"
             f"?apikey={config.TICKETMASTER_API_KEY}"
-            f"&latlong={config.CITY_LAT},{config.CITY_LON}&radius=10&unit=miles"
-            f"&size=10&sort=date,asc"
+            f"&latlong={lat},{lon}&radius=20&unit=km"
+            f"&size=10&sort=date,asc&startDateTime={datetime.now().strftime('%Y-%m-%d')}T00:00:00Z"
         )
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(url)
@@ -422,28 +536,24 @@ async def fetch_events() -> list[dict]:
         for ev in d.get("_embedded", {}).get("events", []):
             venue = ev.get("_embedded", {}).get("venues", [{}])[0]
             loc   = venue.get("location", {})
-            att   = int(venue.get("capacity", random.randint(1000, 30000)))
-            if att > 50000:   impact = "Critical"
-            elif att > 20000: impact = "High"
-            elif att > 5000:  impact = "Medium"
-            else:             impact = "Low"
+            att   = int(venue.get("capacity", 10000))
             events.append({
-                "name":         ev.get("name", "Unknown Event"),
-                "venue":        venue.get("name", "Unknown Venue"),
-                "category":     ev.get("classifications", [{}])[0].get("segment", {}).get("name", "Other"),
-                "attendance":   att,
-                "start":        ev.get("dates", {}).get("start", {}).get("localTime", "TBD"),
-                "end":          "TBD",
-                "lat":          float(loc.get("latitude", config.CITY_LAT)),
-                "lon":          float(loc.get("longitude", config.CITY_LON)),
-                "impact":       impact,
+                "name":          ev.get("name", "Event"),
+                "venue":         venue.get("name", "Unknown Venue"),
+                "category":      ev.get("classifications", [{}])[0].get("segment", {}).get("name", "Other"),
+                "attendance":    att,
+                "start":         ev.get("dates", {}).get("start", {}).get("localTime", "TBD"),
+                "end":           "TBD",
+                "lat":           float(loc.get("latitude", lat)),
+                "lon":           float(loc.get("longitude", lon)),
+                "impact":        _event_impact(att),
                 "road_closures": att > 10000,
                 "parking_impact": att > 5000,
-                "source": "ticketmaster",
+                "source":        "ticketmaster",
             })
-        return events or _mock_events()
+        return events
     except Exception:
-        return _mock_events()
+        return []
 
 # ── DELIVERIES (simulated fleet) ───────────────────────────────────────────────
 
