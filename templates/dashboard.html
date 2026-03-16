@@ -544,6 +544,7 @@
       display: flex; flex-direction: column;
       box-shadow: 0 24px 64px rgba(0,0,0,.6);
       animation: dd-slide-in 0.22s ease;
+      position: relative; z-index: 100000;
     }
     @keyframes dd-slide-in {
       from { opacity:0; transform: translateY(18px) scale(0.98); }
@@ -1861,12 +1862,13 @@ function openDrilldown(filterType) {
 
   renderDrilldownSummary();
   renderDrilldownTable();
-  document.getElementById('drilldown-overlay').classList.add('open');
+  const ov = document.getElementById('drilldown-overlay');
+  ov.style.cssText = 'display:flex !important; position:fixed; inset:0; background:rgba(0,0,0,.75); z-index:99999; align-items:center; justify-content:center; padding:20px;';
   document.body.style.overflow = 'hidden';
 }
 
 function closeDrilldown() {
-  document.getElementById('drilldown-overlay').classList.remove('open');
+  document.getElementById('drilldown-overlay').style.cssText = 'display:none !important;';
   document.body.style.overflow = '';
 }
 
